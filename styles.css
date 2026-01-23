@@ -584,6 +584,163 @@ main {
     }
 }
 
+/* ============================================
+   Scrollytelling Section Styles
+   ============================================ */
+
+/* ============================================
+   Scrollytelling Section Styles
+   ============================================ */
+
+/* 1. 外層軌道：創造足夠長的滾動距離 (4倍螢幕高) */
+.scrolly-container {
+    position: relative;
+    height: 400vh; 
+    width: 100%;
+    background: var(--bg-white);
+    z-index: 1; /* 降低 z-index，讓內容在上層 */
+    pointer-events: none; /* 讓滑鼠事件穿透 */
+}
+
+.scrolly-container > * {
+    pointer-events: auto; /* 但子元素可以接收事件 */
+}
+
+/* 2. 視窗層：利用 sticky 自動黏在頂部，不需要 JS 控制 */
+.sticky-view {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    width: 100%;
+    overflow: visible; /* 改為 visible 確保內容可見 */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 1;
+    pointer-events: none; /* 讓滑鼠事件穿透，避免遮擋子元素 */
+}
+
+/* --- 內部元件樣式 --- */
+
+/* Slogan 文字區塊 */
+.protein-slogan-wrapper {
+    position: absolute;
+    top: 50%;
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    padding: 0 10%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+    z-index: 20;
+}
+
+.protein-slogan-left, .protein-slogan-right {
+    text-align: center;
+}
+.slogan-text {
+    font-size: clamp(2rem, 4vw, 3.5rem);
+    font-weight: 700;
+    color: var(--primary-green-dark);
+}
+
+/* 3D Viewer 容器 */
+.protein-viewer-wrapper {
+    position: absolute;
+    top: 50% !important; /* 初始位置在畫面中間，讓圖片一開始就顯示 */
+    left: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    width: 100% !important;
+    height: 100% !important;
+    pointer-events: none; /* 讓滑鼠滾輪直接穿透，不會卡在圖片上 */
+    z-index: 100 !important; /* 大幅提高 z-index 確保在所有元素之上 */
+    visibility: visible !important;
+    display: block !important;
+    opacity: 1 !important;
+}
+
+/* 個別蛋白質畫布 */
+.protein-viewer-item {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%); /* 預設居中 */
+    width: 400px;
+    height: 400px;
+    opacity: 0.5; /* 拿掉 !important，這樣 JS 才能控制它變清楚 */
+    transition: opacity 0.1s linear; /* 讓變化更即時 */
+    visibility: visible !important;
+    display: block !important;
+    z-index: 101 !important; /* 確保在 wrapper 之上 */
+    background: transparent !important; /* 去背：背景透明 */
+}
+
+/* NGL Stage 修正 */
+.ngl-stage {
+    width: 100% !important;
+    height: 100% !important;
+    display: block !important;
+    visibility: visible !important;
+    position: relative !important;
+    background: transparent !important; /* 去背：背景透明 */
+    overflow: visible !important;
+    z-index: 102 !important; /* 確保在 item 之上 */
+}
+
+/* 確保 Canvas 可見 */
+.ngl-stage canvas {
+    display: block !important;
+    visibility: visible !important;
+    position: relative !important;
+    opacity: 1 !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    z-index: 999 !important; /* 確保在最上層 */
+    pointer-events: none !important; /* 讓滑鼠事件穿透 */
+}
+
+/* 下方描述文字區塊 */
+.protein-labels-wrapper {
+    position: absolute;
+    bottom: 10%;
+    left: 50%;
+    width: 80%;
+    max-width: 1200px;
+    display: grid !important; /* 強制顯示 */
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 2rem;
+    opacity: 0;
+    transform: translateX(-50%) translateY(30px);
+    transition: opacity 0.5s ease, transform 0.5s ease;
+    z-index: 30 !important;
+    visibility: visible !important;
+}
+
+.protein-label-item {
+    text-align: center;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 1.5rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+}
+
+.protein-label-item h3 {
+    color: var(--primary-green);
+    margin-bottom: 0.5rem;
+}
+
+/* 手機版調整 */
+@media (max-width: 768px) {
+    .scrolly-container { height: 300vh; }
+    .protein-viewer-item { width: 280px; height: 280px; }
+    .protein-labels-wrapper { grid-template-columns: 1fr; bottom: 5%; }
+    .protein-slogan-wrapper { flex-direction: column; gap: 20rem; opacity: 0.5; }
+}
+
 /* Section Styles */
 .section {
     padding: 5rem 2rem;
@@ -1107,6 +1264,59 @@ main {
         flex-direction: column;
         text-align: center;
     }
+
+    /* Protein Visualization Responsive */
+    .protein-visualization-section {
+        padding: 4rem 1.5rem;
+        min-height: auto;
+    }
+
+    .protein-slogan-wrapper {
+        position: relative;
+        transform: none;
+        top: auto;
+        padding: 2rem 0;
+        flex-direction: column;
+        gap: 2rem;
+    }
+
+    .protein-slogan-left,
+    .protein-slogan-right {
+        text-align: center !important;
+    }
+
+    .protein-viewer-wrapper {
+        height: 400px;
+        margin: 2rem 0;
+    }
+
+    .protein-viewer-item {
+        width: 300px;
+        height: 300px;
+    }
+
+    .protein-labels-wrapper {
+        grid-template-columns: 1fr;
+        gap: 2rem;
+        margin-top: 2rem;
+    }
+
+    .protein-label-item h3 {
+        font-size: 1.25rem;
+    }
+
+    .protein-label-item p {
+        font-size: 0.9rem;
+    }
+
+    .visualization-description {
+        padding: 1.5rem;
+        margin-top: 2rem;
+    }
+
+    .visualization-description p {
+        font-size: 1rem;
+    }
 }
 
 @media (max-width: 480px) {
@@ -1130,6 +1340,40 @@ main {
     .features-grid,
     .team-grid {
         grid-template-columns: 1fr;
+    }
+
+    /* Protein Visualization Mobile */
+    .protein-visualization-section {
+        padding: 3rem 1rem;
+    }
+
+    .protein-slogan-wrapper {
+        padding: 1.5rem 0;
+    }
+
+    .slogan-text {
+        font-size: 1.75rem;
+    }
+
+    .company-name {
+        font-size: 1rem;
+    }
+
+    .company-tagline {
+        font-size: 0.85rem;
+    }
+
+    .protein-viewer-wrapper {
+        height: 350px;
+    }
+
+    .protein-viewer-item {
+        width: 250px;
+        height: 250px;
+    }
+
+    .protein-label-item p {
+        font-size: 0.85rem;
     }
 }
 
