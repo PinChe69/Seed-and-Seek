@@ -612,13 +612,13 @@ main {
     top: 0;
     height: 100vh;
     width: 100%;
-    overflow: visible; /* 改為 visible 確保內容可見 */
+    overflow: visible; /* sticky 容器不要裁切，避免 iOS 失效 */
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
     z-index: 1;
-    pointer-events: none; /* 讓滑鼠事件穿透，避免遮擋子元素 */
+    pointer-events: auto; /* 允許箭頭/控制項可點擊（子元素再各自控管） */
 }
 
 /* --- 內部元件樣式 --- */
@@ -649,9 +649,10 @@ main {
 /* 3D Viewer 容器 */
 .protein-viewer-wrapper {
     position: absolute;
-    top: 50% !important; /* 初始位置在畫面中間，讓圖片一開始就顯示 */
-    left: 50% !important;
-    transform: translate(-50%, -50%) !important;
+    /* 不要用 !important，否則 JS 動態調整 top 會完全失效（你說平板往上移沒變就是這個原因） */
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     width: 100% !important;
     height: 100% !important;
     pointer-events: none; /* 讓滑鼠滾輪直接穿透，不會卡在圖片上 */
@@ -669,6 +670,7 @@ main {
     transform: translate(-50%, -50%); /* 預設居中 */
     width: 400px;
     height: 400px;
+    overflow: hidden; /* 把 WebGL/canvas 溢出限制在盒內，避免重整時撐寬整頁 */
     opacity: 0.5; /* 拿掉 !important，這樣 JS 才能控制它變清楚 */
     transition: opacity 0.1s linear; /* 讓變化更即時 */
     visibility: visible !important;
@@ -685,8 +687,80 @@ main {
     visibility: visible !important;
     position: relative !important;
     background: transparent !important; /* 去背：背景透明 */
-    overflow: visible !important;
+    overflow: hidden !important; /* 防止 canvas 初始尺寸異常撐寬頁面 */
     z-index: 102 !important; /* 確保在 item 之上 */
+}
+
+/* 手機/平板模式：輪播箭頭 */
+.protein-carousel-arrow {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: auto;
+    height: auto;
+    background: none; /* 移除背景 */
+    border: none; /* 移除邊框 */
+    border-radius: 0; /* 移除圓形 */
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000; /* 大幅提高 z-index 確保在最上層 */
+    opacity: 0;
+    pointer-events: auto; /* 確保可以點擊 */
+    transition: opacity 0.3s ease;
+    color: var(--primary-green); /* 綠色 */
+    padding: 15px;
+    touch-action: manipulation; /* 改善觸控響應 */
+}
+
+.protein-carousel-arrow svg {
+    stroke-width: 3; /* 加粗三角形 */
+    width: 32px;
+    height: 32px;
+    stroke: var(--primary-green); /* 確保是綠色 */
+    fill: none;
+}
+
+.protein-carousel-arrow:hover {
+    opacity: 0.8; /* 懸停時稍微不透明 */
+}
+
+.protein-carousel-arrow:active {
+    opacity: 1; /* 點擊時完全不透明 */
+}
+
+.protein-carousel-prev {
+    left: 10px;
+}
+
+.protein-carousel-next {
+    right: 10px;
+}
+
+/* 桌面模式：隱藏箭頭 */
+@media (min-width: 768px) {
+    .protein-carousel-arrow {
+        display: none !important;
+    }
+}
+
+/* 手機/平板幻燈片模式：不要箭頭 */
+.slideshow-mode .protein-carousel-arrow {
+    display: none !important;
+}
+
+/* 手機/平板幻燈片模式：文字固定在同一個位置，不要因內容高度不同而上下跳 */
+.slideshow-mode .protein-labels-wrapper {
+    display: block !important; /* 覆蓋原本的 grid，改成疊放 */
+}
+
+.slideshow-mode .protein-labels-wrapper .protein-label-item {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    width: 100%;
 }
 
 /* 確保 Canvas 可見 */
@@ -736,7 +810,8 @@ main {
 /* 手機版調整 */
 @media (max-width: 768px) {
     .scrolly-container { height: 300vh; }
-    .protein-viewer-item { width: 280px; height: 280px; }
+    /* 手機/小平板：縮小蛋白畫布，左右留白會明顯變寬 */
+    .protein-viewer-item { width: 240px; height: 240px; }
     .protein-labels-wrapper { grid-template-columns: 1fr; bottom: 5%; }
     .protein-slogan-wrapper { flex-direction: column; gap: 20rem; opacity: 0.5; }
 }
@@ -1317,19 +1392,31 @@ main {
     .visualization-description p {
         font-size: 1rem;
     }
+
+    /* 手機/小平板：左右邊距再寬一點（你說目前太窄） */
+    .header-container {
+        padding: 0 1.75rem;
+    }
+
+    /* Scrolly 這段的文字卡片：縮窄一點，左右留更寬 */
+    .protein-labels-wrapper {
+        width: 76%;
+    }
 }
 
 @media (max-width: 480px) {
     .header-container {
-        padding: 0 1rem;
+        padding: 0 2rem;
     }
 
-    .section {
-        padding: 3rem 1rem;
+    /* 手機：整站內容左右留白加大（你說全頁 sections 都太貼邊） */
+    .section,
+    .content-section {
+        padding: 3rem 2rem;
     }
 
     .hero {
-        padding: 2rem 1rem;
+        padding: 2rem 2rem;
         min-height: 80vh;
     }
 
@@ -1344,7 +1431,7 @@ main {
 
     /* Protein Visualization Mobile */
     .protein-visualization-section {
-        padding: 3rem 1rem;
+        padding: 3rem 1.5rem;
     }
 
     .protein-slogan-wrapper {
@@ -1368,12 +1455,17 @@ main {
     }
 
     .protein-viewer-item {
-        width: 250px;
-        height: 250px;
+        width: 220px;
+        height: 220px;
+    }
+
+    /* 讓下方文字卡片左右留白更寬（更明顯） */
+    .protein-labels-wrapper {
+        width: 72%;
+        max-width: 420px;
     }
 
     .protein-label-item p {
         font-size: 0.85rem;
     }
 }
-
