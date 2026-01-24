@@ -22,12 +22,26 @@
         }
         .protein-viewer-wrapper {
             z-index: 100 !important;
-            pointer-events: none; /* 讓滾輪可以滾動頁面 */
+            pointer-events: none; /* 讓 wrapper 不擋路 */
         }
         .protein-viewer-item {
             z-index: 101 !important;
             opacity: 0.5; /* 初始半透明，但允許 JS 控制（移除 !important） */
             transition: opacity 0.1s linear; /* 讓變化更即時 */
+            pointer-events: none; /* 確保 wrapper 內的子元素（除了按鈕）不擋路，但可見 */
+        }
+        
+        /* 確保按鈕在最上層且可點擊 */
+        .protein-carousel-arrow {
+            z-index: 9999 !important; /* 超級高，確保贏過 canvas */
+            pointer-events: auto !important; /* 強制接收點擊 */
+            touch-action: manipulation; /* 優化觸控反應 */
+            cursor: pointer;
+            /* 增加點擊範圍，避免手指太粗點不到 */
+            padding: 20px; 
+            margin: -10px; 
+            background: rgba(255, 255, 255, 0.3); /* 暫時加個半透明背景測試位置，確認後可移除 */
+            border-radius: 50%;
         }
         /* 讓 NGL Stage 能夠接收滑鼠事件(如果需要旋轉)，或者設為 none */
         .ngl-stage {
@@ -74,8 +88,7 @@
                 <div class="hero-overlay"></div>
                 <div class="hero-container">
                     <div class="hero-tag">Seed and Seek · Protein Design & Optimization</div>
-                    <h1 class="hero-title">加速演化，精準優化</h1>
-                    <p class="hero-subtitle">AI 驅動的蛋白質序列優化平台</p>
+                    <h1 class="hero-title">AI 驅動的<br>蛋白質序列優化平台</h1>
                     <p class="hero-description">
                         提交您的原型序列與優化目標，我們的專有生成式 AI 引擎將在數天內交付優化序列。從數月的濕實驗迭代，縮短至數天的計算設計，大幅加速您的藥物研發流程。
                     </p>
@@ -112,6 +125,18 @@
                             <div id="stage-heatmap" class="ngl-stage"></div>
                         </div>
                     </div>
+
+                    <!-- 手機/平板模式：輪播箭頭（放在 wrapper 外，避免被 pointer-events: none 影響點擊） -->
+                    <button class="protein-carousel-arrow protein-carousel-prev" id="carousel-prev" aria-label="上一張">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                            <path d="M15 18l-6-6 6-6"/>
+                        </svg>
+                    </button>
+                    <button class="protein-carousel-arrow protein-carousel-next" id="carousel-next" aria-label="下一張">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                            <path d="M9 18l6-6-6-6"/>
+                        </svg>
+                    </button>
 
                     <div class="protein-labels-wrapper" id="labels-wrapper">
                         <div class="protein-label-item">
@@ -250,14 +275,177 @@
 
     <!-- Protein 3D Visualization Script - Scrollytelling -->
     <script>
+        // ==================================================
+        // 全域變數宣告
+        // ==================================================
         var stages = [];
         var stageStruct, stageFluoro, stageSeq;
+        
+        // 核心狀態變數
+        var currentCarouselIndex = 1; // 預設顯示中間
+        var isCarouselLocked = false; // "鎖定狀態"：true=按鈕控制, false=滾動控制
+        
+        // 旋轉同步變數
+        var globalRotationY = 0; // 全局旋轉角度
+        var loadedStages = []; // 已載入的 stage 列表
+        var isRotationSynced = false; // 是否已同步旋轉
+        
+        // 滾動方向追蹤（用於凍結機制）
+        var lastProgress = 0; // 上一次的進度值
 
         // ==================================================
-        // 1. NGL 初始化與畫圖邏輯 (針對新需求修改)
+        // 手機/平板：自動幻燈片 (每 2 秒切換)
+        // ==================================================
+        var slideshowTimer = null;
+        var slideshowStarted = false;
+        var slideshowIntervalMs = 2000;
+
+        function isMobileOrTablet() {
+            // 只針對「手機」啟用幻燈片；平板/桌機維持原本三個分離
+            // 同時避免桌機只是把視窗縮到很窄就被判定成手機
+            var w = window.innerWidth || 0;
+            if (w >= 768) return false;
+
+            var coarsePointer = false;
+            try {
+                if (window.matchMedia) {
+                    coarsePointer = window.matchMedia("(pointer: coarse)").matches;
+                }
+            } catch (_) {}
+
+            var hasTouchPoints = false;
+            try { hasTouchPoints = (navigator.maxTouchPoints || 0) > 0; } catch (_) {}
+
+            var ua = "";
+            try { ua = navigator.userAgent || ""; } catch (_) {}
+            var mobileUA = /Android|iPhone|iPod|Mobile/i.test(ua);
+
+            return coarsePointer || hasTouchPoints || mobileUA;
+        }
+
+        function setSlideshowMode(enabled) {
+            try {
+                if (!document.body) return;
+                if (enabled) document.body.classList.add('slideshow-mode');
+                else document.body.classList.remove('slideshow-mode');
+            } catch (_) {}
+        }
+
+        function prepareSlideshowLabels() {
+            var labels = document.getElementById('labels-wrapper');
+            if (!labels) return;
+
+            // 固定在同一個位置，不要每次切換都上下位移
+            labels.style.opacity = 1;
+            labels.style.transform = "translateX(-50%) translateY(0)";
+
+            // 固定 wrapper 高度，避免不同段落高度造成「上下跳」
+            var labelItems = labels.querySelectorAll('.protein-label-item');
+            var maxH = 0;
+
+            labelItems.forEach(function(item) {
+                item.style.display = "block";
+                item.style.opacity = "1"; // 先全部顯示來量高度
+            });
+
+            labelItems.forEach(function(item) {
+                var h = 0;
+                try { h = item.getBoundingClientRect().height; } catch (_) {}
+                if (h > maxH) maxH = h;
+            });
+
+            if (maxH > 0) labels.style.height = Math.ceil(maxH) + "px";
+        }
+
+        function applySlideshowFrame(activeIndex) {
+            var itemStruct = document.getElementById('item-structure');
+            var itemFluoro = document.getElementById('item-fluorescence');
+            var itemSeq = document.getElementById('item-sequence');
+            var labels = document.getElementById('labels-wrapper');
+
+            var items = [
+                { el: itemStruct, idx: 0 },
+                { el: itemFluoro, idx: 1 },
+                { el: itemSeq, idx: 2 }
+            ];
+
+            items.forEach(function(entry) {
+                if (!entry.el) return;
+                entry.el.style.transition = "opacity 0.45s ease";
+                entry.el.style.transform = "translate(-50%, -50%)"; // 全部疊在一起
+                entry.el.style.visibility = "visible";
+                if (entry.idx === activeIndex) {
+                    entry.el.style.opacity = "1";
+                    entry.el.style.zIndex = "110";
+                } else {
+                    entry.el.style.opacity = "0";
+                    entry.el.style.zIndex = "100";
+                }
+            });
+
+            // 文字：只顯示當前那一段
+            if (labels) {
+                var labelItems = labels.querySelectorAll('.protein-label-item');
+                labelItems.forEach(function(item, index) {
+                    item.style.transition = "opacity 0.35s ease";
+                    if (index === activeIndex) {
+                        item.style.display = "block";
+                        item.style.opacity = "1";
+                    } else {
+                        // 不要用 display none（會讓 wrapper 高度改變 -> 文字上下跳）
+                        item.style.display = "block";
+                        item.style.opacity = "0";
+                    }
+                });
+            }
+        }
+
+        function startSlideshow() {
+            if (slideshowTimer) return;
+            slideshowStarted = true;
+            setSlideshowMode(true);
+            prepareSlideshowLabels();
+            currentCarouselIndex = 0; // 從第一張開始（結構）
+            applySlideshowFrame(currentCarouselIndex);
+            slideshowTimer = setInterval(function() {
+                currentCarouselIndex = (currentCarouselIndex + 1) % 3;
+                applySlideshowFrame(currentCarouselIndex);
+            }, slideshowIntervalMs);
+        }
+
+        function stopSlideshowAndReset() {
+            if (slideshowTimer) {
+                clearInterval(slideshowTimer);
+                slideshowTimer = null;
+            }
+            slideshowStarted = false;
+            setSlideshowMode(false);
+
+            // 回到「疊圖」狀態：三個都可見但半透明，文字先隱藏（讓 slogan 段落主導）
+            var itemStruct = document.getElementById('item-structure');
+            var itemFluoro = document.getElementById('item-fluorescence');
+            var itemSeq = document.getElementById('item-sequence');
+            var labels = document.getElementById('labels-wrapper');
+            [itemStruct, itemFluoro, itemSeq].forEach(function(el) {
+                if (!el) return;
+                el.style.transition = "opacity 0.2s linear";
+                el.style.transform = "translate(-50%, -50%)";
+                el.style.opacity = "0.5";
+                el.style.visibility = "visible";
+                el.style.zIndex = "101";
+            });
+            if (labels) {
+                labels.style.height = ""; // 清掉幻燈片固定高度
+                labels.style.opacity = 0;
+                labels.style.transform = "translateX(-50%) translateY(30px)";
+                resetLabelsForScrollMode();
+            }
+        }
+
+        // ==================================================
+        // 1. NGL 初始化 (維持不變)
         // ==================================================
         function initNGL() {
-            // 延遲偵測 NGL 載入狀況
             if (typeof NGL === 'undefined') {
                 setTimeout(initNGL, 200);
                 return;
@@ -267,18 +455,15 @@
                 var el = document.getElementById(id);
                 if(!el) return null;
 
-                // 建立舞台
                 var stage = new NGL.Stage(id, { 
-                    backgroundColor: "white", // 先用白色，然後設置為透明
+                    backgroundColor: "white", 
                     tooltip: false,
-                    // 提高畫質採樣
                     sampleLevel: 2
                 });
                 
-                // 關鍵：設置背景為完全透明，避免白色覆蓋造成霧霧感
                 setTimeout(function() {
                     if (stage.viewer && stage.viewer.renderer) {
-                        stage.viewer.renderer.setClearColor(0x000000, 0); // 透明背景 (alpha = 0)
+                        stage.viewer.renderer.setClearColor(0x000000, 0);
                         stage.viewer.renderer.clear();
                     }
                 }, 300);
@@ -286,208 +471,476 @@
                 stage.mouseControls.clear();
                 stages.push(stage);
                 
-                // 載入 PDB
                 stage.loadFile("https://files.rcsb.org/download/1EMA.pdb").then(function(o){
                     o.removeAllRepresentations();
                     
-                    // === 需求 1: 左圖改成「表面模型」 (全部灰色) ===
                     if(type === 'structure') {
-                        // Surface: 展示蛋白質整體外觀形狀，全部灰色
                         o.addRepresentation("surface", {
-                            sele: "all",
-                            color: "gray",         // 全部改成灰色
-                            opacity: 1.0,           // 完全不透明，看起來像固體
-                            surfaceType: "av",      // 平滑表面
-                            probeRadius: 1.4,
-                            quality: "high"
+                            sele: "all", color: "gray", opacity: 1.0, surfaceType: "av", probeRadius: 1.4, quality: "high"
                         });
                     } 
-                    // === 需求 2: 中圖改為「清晰輪廓 + 綠色螢光」 (加半透明綠色表面) ===
                     else if (type === 'fluorescence') {
-                        // 1. 清晰的骨架 (Cartoon)
-                        o.addRepresentation("cartoon", {
-                            color: "#00ff00", // 實心綠
-                            opacity: 1.0,     // 不透明，線條清楚
-                            quality: "high"
-                        });
-
-                        // 2. 發光核心的綠色 box-shadow 效果（多層光暈）
-                        // 最外層：大範圍綠色光暈（模擬 box-shadow）
-                        o.addRepresentation("licorice", { 
-                            sele: "CRO",      // 發光團
-                            color: "#00ff00", // 綠色
-                            radius: 7.0,      // 大範圍
-                            opacity: 0.1     // 很淡，模擬外層陰影
-                        }); 
-                        
-                        // 中層：中等範圍綠色光暈
-                        o.addRepresentation("licorice", { 
-                            sele: "CRO",
-                            color: "#66ff66", // 淺綠色
-                            radius: 5.0,
-                            opacity: 0.5     // 中等透明度
-                        }); 
-                        
-                        // 內層：發光核心（亮白綠色）
-                        o.addRepresentation("licorice", { 
-                            sele: "CRO",      // 發光團
-                            color: "#F4FAEE", // 亮白綠色
-                            radius: 3.0,    // 核心大小
-                            opacity: 1.0      // 完全不透明
-                        }); 
-
-                        // 3. 半透明的綠色表面 (加在上面)
+                        o.addRepresentation("cartoon", { color: "#00ff00", opacity: 1.0, quality: "high" });
+                        o.addRepresentation("licorice", { sele: "CRO", color: "#00ff00", radius: 7.0, opacity: 0.1 }); 
+                        o.addRepresentation("licorice", { sele: "CRO", color: "#66ff66", radius: 5.0, opacity: 0.5 }); 
+                        o.addRepresentation("licorice", { sele: "CRO", color: "#F4FAEE", radius: 3.0, opacity: 1.0 }); 
                         o.addRepresentation("surface", {
-                            sele: "all",
-                            color: "#00ff00",  // 綠色
-                            opacity: 0.25,       // 半透明
-                            surfaceType: "av", // 平滑表面
-                            probeRadius: 1.4,
-                            quality: "high",
-                            side: "front"      // 只渲染正面
+                            sele: "all", color: "#00ff00", opacity: 0.25, surfaceType: "av", probeRadius: 1.4, quality: "high", side: "front"
                         });
                     } 
-                    // === 右圖: 序列 (保持彩虹色) ===
                     else if (type === 'sequence') {
-                        o.addRepresentation("cartoon", { 
-                            colorScheme: "residueindex", 
-                            opacity: 1.0,     // 設定為完全不透明
-                            quality: "high" 
-                        });
+                        o.addRepresentation("cartoon", { colorScheme: "residueindex", opacity: 1.0, quality: "high" });
+                    }
+                    o.autoView();
+                    
+                    // 記錄已載入的 stage
+                    loadedStages.push(stage);
+                    
+                    // 如果三個都載入了，同步旋轉角度
+                    if (loadedStages.length === 3 && !isRotationSynced) {
+                        syncRotation();
                     }
                     
-                    o.autoView();
-                    // 開啟定速自轉展示細節
-                    stage.setSpin(true); 
-                    
+                    // 啟動旋轉
+                    stage.setSpin(true);
                 }).catch(e => console.error("Load failed:", e));
-                
                 return stage;
             }
 
-            // 依序載入
             stageStruct = loadStage("stage-structure", "structure");
             setTimeout(() => stageFluoro = loadStage("stage-fluorescence", "fluorescence"), 200);
             setTimeout(() => stageSeq = loadStage("stage-heatmap", "sequence"), 400);
         }
 
         // ==================================================
-        // 2. 滾動動畫邏輯 (處理透明度變化)
+        // 旋轉同步函數
+        // ==================================================
+        function syncRotation() {
+            if (isRotationSynced || loadedStages.length < 3) return;
+            
+            isRotationSynced = true;
+            
+            // 使用 Quaternion 設定統一的初始角度
+            var q = new NGL.Quaternion();
+            q.setFromAxisAngle({ x: 0, y: 1, z: 0 }, globalRotationY);
+            
+            // 對所有已載入的 stage 應用相同的角度
+            loadedStages.forEach(function(stage) {
+                if (stage && stage.viewerControls) {
+                    try {
+                        stage.viewerControls.orient(q);
+                    } catch(e) {
+                        console.warn("Rotation sync error:", e);
+                    }
+                }
+            });
+        }
+
+        // ==================================================
+        // 2. 滾動監聽 (修正重點：寬緩衝區間)
         // ==================================================
         function handleScrollAnimation() {
             var section = document.getElementById('scrolly-section');
-            if(!section) return;
+            if (!section) return;
 
             var wrapper = document.getElementById('protein-wrapper');
             var slogan = document.getElementById('slogan-wrapper');
             var labels = document.getElementById('labels-wrapper');
-            
+            var carouselPrev = document.getElementById('carousel-prev');
+            var carouselNext = document.getElementById('carousel-next');
+
+            // 取得 3D 畫布物件
             var itemStruct = document.getElementById('item-structure');
             var itemFluoro = document.getElementById('item-fluorescence');
             var itemSeq = document.getElementById('item-sequence');
 
+            var isMobile = window.innerWidth < 768;
+            var isSlideshowMobile = isMobileOrTablet(); // 手機才 true
             var rect = section.getBoundingClientRect();
             var scrollDistance = rect.height - window.innerHeight;
-            var progress = Math.max(0, Math.min(1, -rect.top / scrollDistance));
-
-            // 1. 上升動畫
-            var moveUpProgress = Math.min(1, progress / 0.2);
-            if(wrapper) {
-                var currentTop = 100 - (moveUpProgress * 50);
-                wrapper.style.top = currentTop + "%";
-                // 確保初始狀態是可見的
-                if(moveUpProgress > 0) wrapper.style.opacity = 1;
-            }
-
-            // 2. 左右分離與透明度變化
-            var separateProgress = 0;
-            if (progress > 0.35) {
-                separateProgress = Math.min(1, (progress - 0.35) / 0.45);
-            }
-
-            var maxOffset = window.innerWidth < 768 ? 0 : 380; 
-            var currentOffset = separateProgress * maxOffset;
             
-            // === 透明度控制：從 0.5 變到 1.0 ===
-            // 初始狀態（progress <= 0.35）：opacity = 0.5
-            // 分離完成（progress >= 0.8）：opacity = 1.0
-            var baseOpacity = 0.5;
-            var targetOpacity = baseOpacity + (separateProgress * (1.0 - baseOpacity)); // 0.5 -> 1.0
-
-            if (itemStruct) {
-                itemStruct.style.transform = `translate(calc(-50% - ${currentOffset}px), -50%)`;
-                // 使用 setProperty 強制設置透明度，確保覆蓋 CSS
-                itemStruct.style.setProperty('opacity', targetOpacity.toString(), 'important');
-            }
-            if (itemSeq) {
-                itemSeq.style.transform = `translate(calc(-50% + ${currentOffset}px), -50%)`;
-                itemSeq.style.setProperty('opacity', targetOpacity.toString(), 'important');
-            }
-            if (itemFluoro) {
-                itemFluoro.style.setProperty('opacity', targetOpacity.toString(), 'important');
-            }
+            // 計算原始進度 0.0 ~ 1.0
+            var rawProgress = Math.max(0, Math.min(1, -rect.top / scrollDistance));
             
-            // 確保初始狀態時透明度正確（還沒開始分離時）
-            if (progress <= 0.35) {
-                if (itemStruct) itemStruct.style.setProperty('opacity', baseOpacity.toString(), 'important');
-                if (itemSeq) itemSeq.style.setProperty('opacity', baseOpacity.toString(), 'important');
-                if (itemFluoro) itemFluoro.style.setProperty('opacity', baseOpacity.toString(), 'important');
+            // 判斷滾動方向（true = 往下滑，false = 往上滑）
+            var isScrollingDown = rawProgress > lastProgress;
+            lastProgress = rawProgress;
+
+            // 只要離開手機模式（平板/桌機），立刻停止幻燈片並清掉樣式，避免「卡在幻燈片」
+            if (!isSlideshowMobile && slideshowStarted) {
+                stopSlideshowAndReset();
             }
 
-            // 3. 文字 Slogan 消散
-            if(slogan) {
-                if(progress > 0.2) {
-                    var fadeOut = (progress - 0.2) / 0.15;
-                    slogan.style.opacity = Math.max(0, 1 - fadeOut);
+            // 手機：不用凍結機制（避免干擾「滑一下就進入幻燈片」的體感）
+            var progress;
+            var sloganProgress;
+            if (isSlideshowMobile) {
+                progress = rawProgress;
+                sloganProgress = rawProgress;
+            } else {
+                // === 問題 3：增加凍結機制 ===
+                // 當圖片完全分離後（progress > 0.8），需要額外的滾動才能繼續
+                // 往上滑不受影響（只在下滑時應用凍結）
+                var freezeStart = 0.8; // 開始凍結的進度點
+                var freezeAmount = 0.15; // 凍結的額外滾動量（相當於 15% 的滾動距離）
+                
+                if (isScrollingDown && rawProgress > freezeStart) {
+                    // 往下滑且超過凍結點：應用凍結，需要額外滾動
+                    var excessProgress = rawProgress - freezeStart;
+                    progress = freezeStart + (excessProgress / (1 + freezeAmount / (1 - freezeStart)));
                 } else {
-                    slogan.style.opacity = 1;
+                    // 往上滑或未到凍結點：正常進度
+                    progress = rawProgress;
+                }
+                
+                // Slogan 區域也應用相同的凍結機制
+                var sloganFreezeStart = 0.2; // Slogan 開始淡出的點
+                var sloganFreezeAmount = 0.1; // Slogan 區域的凍結量
+                
+                if (isScrollingDown && rawProgress > sloganFreezeStart) {
+                    var sloganExcess = rawProgress - sloganFreezeStart;
+                    sloganProgress = sloganFreezeStart + (sloganExcess / (1 + sloganFreezeAmount / (1 - sloganFreezeStart)));
+                } else {
+                    sloganProgress = rawProgress;
                 }
             }
 
-            // 4. 下方 Labels 出現
-            if (labels) {
+            // --- A. Slogan / 疊圖定位 (任何模式都執行) ---
+            // 疊圖要「跟 slogan 一起出現」且位置固定：不要再做從底部往上跑的動畫
+            if (wrapper) {
+                var viewportWidth = window.innerWidth || 1200;
+                // 你截圖那種「平板感」寬度通常在 768~1199：這個區間往上移一點
+                var isTabletLayout = (viewportWidth >= 768 && viewportWidth < 1200);
+                var fixedTop = isTabletLayout ? 43 : 50;
+                wrapper.style.top = fixedTop + "%";
+            }
+
+            if (slogan) {
+                if (isMobile) {
+                    slogan.style.flexDirection = "column";
+                    slogan.style.padding = "55% 5% 35% 5%";
+                    slogan.style.gap = "20rem";
+                    slogan.style.justifyContent = "space-between";
+                    slogan.style.top = "0";
+                    slogan.style.transform = "none";
+                } else {
+                    slogan.style.flexDirection = "row";
+                    slogan.style.justifyContent = "space-between";
+                    slogan.style.padding = "0 10%";
+                    slogan.style.top = "50%";
+                    slogan.style.transform = "translateY(-50%)";
+                }
+                // Slogan 隨進度淡出（使用 sloganProgress）
+                var fadeOut = sloganProgress > 0.2 ? (sloganProgress - 0.2) / 0.15 : 0;
+                slogan.style.opacity = Math.max(0, 1 - fadeOut);
+            }
+
+            // ==================================================
+            // 手機模式：slogan 結束後改成自動幻燈片（全部疊在一起）
+            // ==================================================
+            if (isSlideshowMobile) {
+                // 不要箭頭、不要手動滑動輪播
+                if (carouselPrev) { carouselPrev.style.display = "none"; carouselPrev.style.pointerEvents = "none"; }
+                if (carouselNext) { carouselNext.style.display = "none"; carouselNext.style.pointerEvents = "none"; }
+
+                // slogan 走完後（約 progress >= 0.35）開始幻燈片
+                // 修 bug：回滑進來時 rect.top 可能 > 0，舊條件會導致「先跑分離、再回來才變幻燈片」
+                var inViewport = rect.bottom > 0 && rect.top < window.innerHeight;
+                if (progress >= 0.35 && inViewport) {
+                    if (!slideshowStarted) startSlideshow();
+                } else {
+                    if (slideshowStarted) stopSlideshowAndReset();
+                }
+
+                // 手機：不管幻燈片有沒有啟動，都不要進入「分離/鎖定」邏輯
+                // - 幻燈片已啟動：直接 return（已由 applySlideshowFrame 控制）
+                // - 幻燈片未啟動：強制維持「疊圖」狀態，避免你看到三個圖片分離
+                if (!slideshowStarted) {
+                    [itemStruct, itemFluoro, itemSeq].forEach(function(el) {
+                        if (!el) return;
+                        el.style.transition = "opacity 0.2s linear";
+                        el.style.transform = "translate(-50%, -50%)";
+                        el.style.opacity = "0.5";
+                        el.style.visibility = "visible";
+                        el.style.zIndex = "101";
+                    });
+                    if (labels) {
+                        labels.style.opacity = 0;
+                        labels.style.transform = "translateX(-50%) translateY(30px)";
+                    }
+                }
+                return;
+            }
+
+            // --- B. 鎖定判定邏輯 (Hysteresis) ---
+            if (isMobile) {
+                // 1. 進場門檻 (90%)：滑得很深才鎖定
+                if (!isCarouselLocked && progress > 0.90) {
+                    isCarouselLocked = true;
+                    console.log("狀態變更 -> 鎖定 (顯示按鈕)");
+
+                    // 顯示按鈕與文字
+                    if(carouselPrev) { carouselPrev.style.display = "flex"; carouselPrev.style.opacity = "1"; carouselPrev.style.pointerEvents = "auto"; }
+                    if(carouselNext) { carouselNext.style.display = "flex"; carouselNext.style.opacity = "1"; carouselNext.style.pointerEvents = "auto"; }
+                    if(labels) { labels.style.opacity = 1; labels.style.transform = "translateX(-50%) translateY(0)"; }
+                    
+                    // 執行一次位置初始化
+                    updateCarouselDisplay();
+                } 
+                // 2. 離場門檻 (75%)：必須往回滑很多才解鎖 (避免跳動)
+                else if (isCarouselLocked && progress < 0.75) {
+                    isCarouselLocked = false;
+                    console.log("狀態變更 -> 解鎖 (隱藏按鈕)");
+
+                    // 隱藏按鈕
+                    if(carouselPrev) { carouselPrev.style.opacity = "0"; carouselPrev.style.pointerEvents = "none"; setTimeout(()=>carouselPrev.style.display="none", 300); }
+                    if(carouselNext) { carouselNext.style.opacity = "0"; carouselNext.style.pointerEvents = "none"; setTimeout(()=>carouselNext.style.display="none", 300); }
+
+                    // 回到正常滾動模式時，復原三段文字（避免只剩一段「功能...」）
+                    resetLabelsForScrollMode();
+                }
+            } else {
+                // 電腦版永遠不鎖定
+                isCarouselLocked = false;
+
+                // 若曾在手機輪播模式把文字隱藏，切回桌機時必須復原
+                resetLabelsForScrollMode();
+            }
+
+            // --- C. 根據鎖定狀態決定誰控制位置 ---
+
+            if (isCarouselLocked) {
+                // 【關鍵點】
+                // 如果鎖定了，這裡直接 return。
+                // 滾動程式碼「完全禁止」碰觸圖片位置，將控制權 100% 交給 updateCarouselDisplay 和按鈕。
+                return;
+            }
+
+            // --- D. 滾動分離模式 (非鎖定時執行) ---
+
+            // Labels 淡入淡出 (電腦版邏輯)
+            // === 問題 1：往上滑時文字要淡出 ===
+            if (labels && !isMobile) {
                 if (progress > 0.8) {
                     var labelAlpha = (progress - 0.8) / 0.2;
                     labels.style.opacity = labelAlpha;
                     labels.style.transform = `translateX(-50%) translateY(${(1-labelAlpha)*20}px)`;
                 } else {
+                    // 當 progress < 0.8 時，文字要淡出（往上滑時）
+                    labels.style.opacity = 0;
+                    labels.style.transform = "translateX(-50%) translateY(20px)";
+                }
+            } else if (labels && isMobile) {
+                // 手機版：當往上滑到 slogan 區域時（progress < 0.75），文字要淡出
+                if (progress < 0.75) {
                     labels.style.opacity = 0;
                     labels.style.transform = "translateX(-50%) translateY(20px)";
                 }
             }
+
+            // 計算分離距離 (Separate)
+            var separateProgress = 0;
+            if (progress > 0.35) {
+                separateProgress = Math.min(1, (progress - 0.35) / 0.45);
+            }
+            
+            // 平板對齊下方三欄文字：offset 依螢幕寬度縮放
+            // 桌機（寬度夠大）維持你原本的固定 380，不去動它
+            var vw = (window.innerWidth || 1200);
+            var maxOffset;
+            if (isMobile) maxOffset = 120;
+            else if (vw >= 1200) maxOffset = 380;
+            else maxOffset = Math.min(380, Math.round(vw * 0.27));
+            var currentOffset = separateProgress * maxOffset;
+            var baseOpacity = 0.5;
+            var targetOpacity = baseOpacity + (separateProgress * (1.0 - baseOpacity));
+
+            // 設定樣式 (關閉 Transition 以獲得即時滾動反應)
+            [itemStruct, itemFluoro, itemSeq].forEach(el => {
+                if(el) {
+                    el.style.transition = "none"; // 滾動時關閉動畫，避免延遲
+                    el.style.visibility = "visible";
+                }
+            });
+
+            // 寫入位置
+            if (itemStruct) {
+                itemStruct.style.transform = `translate(calc(-50% - ${currentOffset}px), -50%)`;
+                itemStruct.style.opacity = progress <= 0.35 ? baseOpacity : targetOpacity;
+            }
+            if (itemSeq) {
+                itemSeq.style.transform = `translate(calc(-50% + ${currentOffset}px), -50%)`;
+                itemSeq.style.opacity = progress <= 0.35 ? baseOpacity : targetOpacity;
+            }
+            if (itemFluoro) {
+                itemFluoro.style.transform = `translate(-50%, -50%)`; // 居中
+                itemFluoro.style.opacity = progress <= 0.35 ? baseOpacity : targetOpacity;
+            }
         }
 
-        // 啟動
+        // ==================================================
+        // 3. 輪播控制邏輯 (負責滑入滑出)
+        // ==================================================
+        function resetLabelsForScrollMode() {
+            var labels = document.getElementById('labels-wrapper');
+            if (!labels) return;
+            var labelItems = labels.querySelectorAll('.protein-label-item');
+            labelItems.forEach(function(item) {
+                item.style.display = "block";
+                item.style.opacity = "1";
+            });
+        }
+
+        function updateCarouselDisplay() {
+            var itemStruct = document.getElementById('item-structure');
+            var itemFluoro = document.getElementById('item-fluorescence');
+            var itemSeq = document.getElementById('item-sequence');
+            var labels = document.getElementById('labels-wrapper');
+            
+            var screenWidth = window.innerWidth;
+            // 偏移量：設大一點確保移出畫面
+            var offsetDist = screenWidth < 768 ? screenWidth * 1.5 : 400; 
+
+            // Helper: 設定單一元件位置
+            function setStyle(el, pos) {
+                if (!el) return;
+                // 按鈕控制時，開啟 Transition 產生滑順動畫
+                el.style.transition = "transform 0.5s cubic-bezier(0.25, 0.1, 0.25, 1), opacity 0.5s ease";
+                el.style.opacity = "1";
+                el.style.visibility = "visible";
+
+                if (pos === 'center') {
+                    el.style.transform = "translate(-50%, -50%) scale(1)";
+                    el.style.zIndex = "110"; // 中間層級最高
+                } else if (pos === 'left') {
+                    el.style.transform = `translate(calc(-50% - ${offsetDist}px), -50%) scale(0.8)`;
+                    el.style.zIndex = "100";
+                } else if (pos === 'right') {
+                    el.style.transform = `translate(calc(-50% + ${offsetDist}px), -50%) scale(0.8)`;
+                    el.style.zIndex = "100";
+                }
+            }
+            
+            // 根據 currentCarouselIndex 排列 (0:結構, 1:螢光, 2:序列)
+            // 使用循環差值：上一張永遠在左、下一張永遠在右（方便做「滑入滑出 + 輪迴」）
+            [
+                { el: itemStruct, idx: 0 },
+                { el: itemFluoro, idx: 1 },
+                { el: itemSeq, idx: 2 }
+            ].forEach(function(entry) {
+                var diff = (entry.idx - currentCarouselIndex + 3) % 3;
+                if (diff === 0) setStyle(entry.el, 'center');
+                else if (diff === 1) setStyle(entry.el, 'right');
+                else setStyle(entry.el, 'left');
+            });
+            
+            // 更新下方文字標籤
+            if (labels) {
+                var labelItems = labels.querySelectorAll('.protein-label-item');
+                labelItems.forEach(function(item, index) {
+                    item.style.transition = "opacity 0.3s ease";
+                    if (index === currentCarouselIndex) {
+                        item.style.display = "block";
+                        // 小技巧：requestAnimationFrame 確保 display生效後再淡入
+                        requestAnimationFrame(() => item.style.opacity = "1");
+                    } else {
+                        item.style.opacity = "0";
+                        setTimeout(() => item.style.display = "none", 300);
+                    }
+                });
+            }
+        }
+
+        // 按鈕觸發函式
+        function switchCarousel(direction) {
+            console.log("按鈕點擊:", direction);
+            
+            if (direction === 'next') {
+                currentCarouselIndex = (currentCarouselIndex + 1) % 3;
+            } else {
+                currentCarouselIndex = (currentCarouselIndex - 1 + 3) % 3;
+            }
+            updateCarouselDisplay();
+        }
+
+        // ==================================================
+        // 4. 事件綁定 (DOMContentLoaded)
+        // ==================================================
         document.addEventListener("DOMContentLoaded", function() {
             initNGL();
+            
+            // 滾動事件綁定
             window.addEventListener('scroll', () => window.requestAnimationFrame(handleScrollAnimation));
+            
             window.addEventListener('resize', () => {
                 stages.forEach(s => s.handleResize());
                 handleScrollAnimation();
             });
             
-            // 初始執行一次確保畫面正確，並設置初始透明度
+            // 綁定按鈕 (使用純 click，避免 touchstart 衝突)
+            var carouselPrev = document.getElementById('carousel-prev');
+            var carouselNext = document.getElementById('carousel-next');
+
+            // 你要的行為：手機（幻燈片）不要箭頭、不要手動滑動
+            if (isMobileOrTablet()) {
+                if (carouselPrev) { carouselPrev.style.display = "none"; carouselPrev.style.pointerEvents = "none"; }
+                if (carouselNext) { carouselNext.style.display = "none"; carouselNext.style.pointerEvents = "none"; }
+            }
+
+            // 預設先關閉點擊（避免透明狀態下誤觸），進入鎖定模式時再開啟
+            if (carouselPrev) carouselPrev.style.pointerEvents = "none";
+            if (carouselNext) carouselNext.style.pointerEvents = "none";
+            
+            if (carouselPrev) {
+                carouselPrev.onclick = function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    switchCarousel('prev');
+                };
+            }
+            if (carouselNext) {
+                carouselNext.onclick = function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    switchCarousel('next');
+                };
+            }
+            
+            // 初始化執行一次
             setTimeout(function() {
                 handleScrollAnimation();
                 
-                // 強制設置初始透明度為 0.5，確保圖片一開始是半透明
-                var itemStruct = document.getElementById('item-structure');
-                var itemFluoro = document.getElementById('item-fluorescence');
-                var itemSeq = document.getElementById('item-sequence');
-                
-                if (itemStruct) {
-                    itemStruct.style.setProperty('opacity', '0.5', 'important');
-                    itemStruct.style.visibility = "visible";
-                }
-                if (itemFluoro) {
-                    itemFluoro.style.setProperty('opacity', '0.5', 'important');
-                    itemFluoro.style.visibility = "visible";
-                }
-                if (itemSeq) {
-                    itemSeq.style.setProperty('opacity', '0.5', 'important');
-                    itemSeq.style.visibility = "visible";
+                // 桌面版預設半透明 (手機版由 ScrollAnimation 控制)
+                if (window.innerWidth >= 768) {
+                    var items = document.querySelectorAll('.protein-viewer-item');
+                    items.forEach(el => el.style.opacity = '0.5');
                 }
             }, 500);
+
+            // 手機 Safari 偶發：重整後視窗寬度 / WebGL canvas 尺寸會短暫算錯，導致整頁被撐寬可左右拖
+            // 在 load/pageshow 再強制做一次 resize + 重新計算 scroll 狀態，讓版面穩定
+            function forceLayoutStabilize() {
+                try {
+                    stages.forEach(function(s) {
+                        try { s.handleResize(); } catch (_) {}
+                    });
+                } catch (_) {}
+                try { handleScrollAnimation(); } catch (_) {}
+            }
+
+            window.addEventListener('load', function() {
+                setTimeout(forceLayoutStabilize, 50);
+                setTimeout(forceLayoutStabilize, 300);
+            });
+
+            window.addEventListener('pageshow', function(e) {
+                // bfcache / 重新進入頁面時也做一次
+                if (e && e.persisted) {
+                    setTimeout(forceLayoutStabilize, 50);
+                } else {
+                    setTimeout(forceLayoutStabilize, 50);
+                }
+            });
         });
     </script>
 </body>
