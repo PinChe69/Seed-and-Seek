@@ -1133,6 +1133,69 @@ main {
     margin-bottom: 1rem;
 }
 
+/* 與頂尖機構合作：左右兩欄（產業合作 | 學術交流） */
+.collab-partners-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3rem;
+    max-width: 1000px;
+    margin: 2rem auto 0;
+    align-items: start;
+}
+
+.collab-partners-col {
+    padding: 1.5rem;
+    background: transparent;
+    border-radius: 12px;
+    text-align: center;
+}
+
+.collab-partners-heading {
+    color: var(--primary-green-dark);
+    font-size: 1.35rem;
+    margin-bottom: 1.5rem;
+}
+
+.collab-partners-logos {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    justify-content: center;
+    align-items: center;
+}
+
+.collab-partners-logo-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 80px;
+    padding: 0.5rem;
+    /* 透明 PNG 用白底，才不會出現灰白棋盤格 */
+    background: #fff;
+}
+
+.collab-partners-logo-item img {
+    max-width: 100%;
+    max-height: 100px;
+    object-fit: contain;
+    /* 避免透明圖在部分瀏覽器被當成有底色 */
+    background: #fff;
+}
+
+/* 透明 logo（如 uchicago）：強制白底，透明處顯示為白 */
+.collab-logo-no-bg {
+    background: #fff !important;
+}
+.collab-logo-no-bg .logo-img-transparent {
+    background: #fff !important;
+}
+
+@media (max-width: 768px) {
+    .collab-partners-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* Privacy Section */
 .privacy-content {
     max-width: 900px;
